@@ -41,4 +41,4 @@ The prediction archive contains 68 Rail classifications, 38 Door operation predi
 
 Rail identifies the predicted corrugation class for a recording. Door shows detected operation boundaries and resistance labels. ACV ranks inspection priority rather than confirming a leak. SHM displays predicted fatigue damage, including a percentage relative to D = 1; this is not a remaining-life estimate or a structural-safety certification.
 
-Local validation results and their evaluation protocols are consolidated in the [write-up](Optional_Items/write_up.md). No organiser-held-out score is claimed.
+Local validation results and their evaluation protocols are consolidated in the [write-up](Optional_Items/write_up.md). 
