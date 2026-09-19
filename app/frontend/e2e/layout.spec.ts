@@ -15,6 +15,9 @@ test('workspace sizing and complete Door standby at desktop and mobile widths', 
       const workspace = await page.locator('.rail-workspace').boundingBox();
       expect(Math.abs(exit!.width - workspace!.width)).toBeLessThan(1);
       await expect(page.locator('.exit-sign > .icon')).toHaveCount(0);
+      await expect(page.locator('.exit-symbol [data-exit-part="door"]')).toBeVisible();
+      await expect(page.locator('.exit-symbol [data-exit-part="arrow"]')).toBeVisible();
+      await expect(page.locator('.exit-symbol [data-exit-part="threshold"]')).toHaveCount(1);
       if (width > 900) {
         const sidebar = await page.locator('.upload-panel').boundingBox();
         const visual = await page.locator('.visual-column').boundingBox();

@@ -14,8 +14,8 @@ assert all(health["subsystems"].get(key) for key in ("rail", "door", "acv", "shm
     health
 )
 assert health["model_version"] == "rail-pipeline-v3", health
-assert health["maximum_file_bytes"] == 31457280, health
+assert health["maximum_file_bytes"] == 67108864, health
 for route in ("/", "/rail", "/door", "/acv", "/shm"):
     with urlopen(base + route, timeout=30) as response:
         assert response.status == 200 and b"<html" in response.read().lower(), route
-print("PASS: all routes, four model artifacts, Rail v3, and 30 MiB upload limit")
+print("PASS: all routes, four model artifacts, Rail v3, and 64 MiB upload limit")

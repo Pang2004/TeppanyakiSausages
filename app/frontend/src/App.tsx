@@ -5,6 +5,7 @@ import { RailArtwork } from './RailArtwork';
 import { DoorView, ACVView, SHMView } from './SubsystemViews';
 import { TrainArtwork } from './TrainArtwork';
 import { type Batch, useBatch } from './useBatch';
+import { DiagnosisSummary } from './DiagnosisSummary';
 
 function Icon({ name, className = '' }: { name: 'upload' | 'file' | 'download' | 'arrow' | 'folder'; className?: string }) {
   const paths = { upload: 'M7 16a4 4 0 01-.88-7.9A5 5 0 0116 6a5 5 0 011 9.9M12 12v9m-3-6 3-3 3 3', file: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zm0 0v6h6M8 13h8m-8 4h6', download: 'M12 3v12m-4-4 4 4 4-4M4 16v5h16v-5', arrow: 'm9 5 7 7-7 7', folder: 'M3 7V5h6l2 2h10v13H3z' };
@@ -42,7 +43,11 @@ function Home({ ready }: { ready: boolean | null }) {
 
 function ExitSign({ subsystem }: { subsystem: Subsystem }) {
   return <header className="exit-header"><Link className="exit-sign" to="/">
-    <span className="exit-symbol"><b>EXIT</b><svg viewBox="0 0 36 36" fill="none" aria-hidden="true"><path d="M6 31V9a3 3 0 0 1 3-3h18a3 3 0 0 1 3 3v22M23 18.5H13m0 0 4.5-4.5M13 18.5l4.5 4.5" stroke="currentColor" strokeWidth="3.5" /></svg></span>
+    <span className="exit-symbol"><b>EXIT</b><svg viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path data-exit-part="door" d="M9 33V9.5A3.5 3.5 0 0 1 12.5 6h16A3.5 3.5 0 0 1 32 9.5V33" />
+      <path data-exit-part="arrow" d="M24 19.5H13m0 0 5-5m-5 5 5 5" />
+      <path data-exit-part="threshold" d="M6 33h29" />
+    </svg></span>
     <span className="exit-copy"><span className="ewl-tag">{modules[subsystem].line} · {subsystem.toUpperCase()}</span><strong>Exit to Main Page</strong><span>{modules[subsystem].title}</span></span>
   </Link></header>;
 }
@@ -96,6 +101,7 @@ function RailView({ batch }: { batch: Batch }) {
   const prediction = selected?.result?.subsystem === 'rail' ? selected.result.prediction : undefined;
   return <section className="visual-column" aria-label="Selected recording diagnosis">
     <div className="telemetry-panel"><span className="file-icon"><Icon name="file" /></span><div className="file-label"><span className="eyebrow">{prediction ? 'FILE ANALYSED' : 'RECORDING'} <span className="mini-tag">BATCH ML</span></span><strong title={selected?.name}>{selected?.name ?? 'Awaiting file input…'}</strong></div><span className={`prediction-badge ${!prediction ? 'waiting' : prediction === 'Normal' ? 'good' : 'bad'}`}><span className="dot" />{!prediction ? (selected?.status === 'failed' ? 'Analysis failed' : 'Awaiting result') : prediction === 'Normal' ? 'Nominal Profile' : `${prediction} Corrugation`}</span></div>
+    {selected?.result?.subsystem === 'rail' && <DiagnosisSummary result={selected.result} />}
     <div className="track-panel"><div className="track-head">
       {(['Side I', 'Side II'] as const).map((side, index) => <div className={`track-side ${index ? 'right' : ''}`} key={side}><strong>{index ? 'SIDE II (RIGHT) ▶' : '◀ SIDE I (LEFT)'}</strong><span className={`side-chip ${!prediction ? 'waiting' : prediction === side ? 'bad' : 'good'}`}><span className="dot" />{side}: {!prediction ? 'Waiting' : prediction === side ? 'Bad' : 'Good'}</span></div>)}
       <div className="track-axis">▲ TRACK AXIS ▲<span>CENTERLINE</span></div>

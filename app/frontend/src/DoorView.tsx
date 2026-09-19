@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { DEFAULT_LIMIT, doorClock, doorDuration, type DoorResult, type Health } from './data';
 import type { Batch } from './useBatch';
+import { DiagnosisSummary } from './DiagnosisSummary';
 
 function Time({ value }: { value?: string }) {
   const text = value ? doorClock(value) : '--:--:--.---';
@@ -21,6 +22,7 @@ function Diagnosis({ result, name, message, processing, choose, disabled }: { re
     <div className="door-telemetry"><div className="door-file"><strong title={name}>{name ?? 'Door cycle diagnostics'}</strong><span>DOOR</span></div>
       <div className={`door-summary ${result?.cycles.length ? abnormal ? 'bad' : 'good' : 'waiting'}`}><strong>{result?.cycles.length ? `${abnormal} abnormal resistance ${abnormal === 1 ? 'operation' : 'operations'}` : status}</strong><span>{result?.cycles.length ? `${(abnormal / result.cycles.length * 100).toLocaleString('en', { maximumFractionDigits: 1 })}% rate` : result ? '0 operations · —%' : '— operations · —%'}</span></div>
     </div>
+    {result && <DiagnosisSummary result={result} />}
     <div className={`door-carriage ${state}`}>
       <div className="door-overhead"><span /><i /><span /></div>
       <div className="door-body"><Wall /><div className="door-center">

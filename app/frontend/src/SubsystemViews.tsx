@@ -2,6 +2,7 @@ import { type ACVResult, type SHMResult } from './data';
 import type { Batch } from './useBatch';
 import acvCar from './assets/acv-car.svg';
 import shmCar from './assets/shm-car.svg';
+import { DiagnosisSummary } from './DiagnosisSummary';
 
 const number = (value: number | null | undefined, digits = 2) => value == null || !Number.isFinite(value) ? 'Not available' : value.toLocaleString('en', { maximumFractionDigits: digits });
 function FileHeading({ name, caption }: { name?: string; caption: string }) {
@@ -16,7 +17,7 @@ export { DoorView } from './DoorView';
 function CarCard({ result, car, index }: { result: ACVResult; car: string; index: number }) {
   const d = result.diagnostics[car] ?? {};
   return <article className={`acv-car-card rank-${index}`} aria-label={`Rank ${index + 1}: ${car}`}>
-    <div className="car-card-heading"><span className="rank-number">#{index + 1}</span><div><h2>Car {car}</h2><span className="car-score">Ranking score: {number(result.car_scores[car], 4)}</span></div><span className="rank-status">{index === 0 ? 'HIGHEST PRIORITY' : `RANK ${index + 1}`}</span></div>
+    <div className="car-card-heading"><span className="rank-number">#{index + 1}</span><div><h2>Car {car}</h2><span className="car-score">Relative diagnostic score: {number(result.car_scores[car], 4)}</span></div><span className="rank-status">{index === 0 ? 'HIGHEST PRIORITY' : `RANK ${index + 1}`}</span></div>
     <div className="acv-car-stage"><span>{index === 0 ? 'PRIORITISE HVAC INSPECTION' : 'ACV / CAR TELEMETRY'}</span><img src={acvCar} alt={`Car ${car} ventilation illustration`} /></div>
     <dl className="car-metrics"><div><dt>Cabin temperature</dt><dd>{number(d.cabin_temperature_median, 1)}{d.cabin_temperature_median == null ? '' : ' °C'}</dd></div><div><dt>Temperature coverage</dt><dd>{d.temperature_coverage == null ? 'Not available' : `${number(d.temperature_coverage * 100, 1)}%`}</dd></div></dl>
   </article>;
@@ -24,7 +25,7 @@ function CarCard({ result, car, index }: { result: ACVResult; car: string; index
 export function ACVView({ batch }: { batch: Batch }) {
   const selected = batch.records.find(r => r.id === batch.selected);
   const result = selected?.result?.subsystem === 'acv' ? selected.result : undefined;
-  return <section className="visual-column acv-view" aria-label="ACV car rankings"><FileHeading name={selected?.name} caption="ACV / RANKED CAR INSPECTION" /><div className="module-note">Cars are ordered by model score. Rankings indicate inspection priority, not a confirmed leak or a leak probability.</div>{result ? <><div className="ranking-summary"><strong>{result.ranked_cars.length} cars ranked</strong><span>Highest priority first</span></div><div className="car-rankings">{result.ranked_cars.map((car, index) => <CarCard key={car} result={result} car={car} index={index} />)}</div></> : <><div className="acv-car-stage empty-car"><img src={acvCar} alt="Ventilation carriage awaiting analysis" /></div><Empty error={selected?.error} /></>}</section>;
+  return <section className="visual-column acv-view" aria-label="ACV car rankings"><FileHeading name={selected?.name} caption="ACV / RANKED CAR INSPECTION" />{result && <DiagnosisSummary result={result} />}<div className="module-note">Cars are ordered by relative diagnostic score. Rankings indicate inspection priority, not a confirmed leak or a leak probability.</div>{result ? <><div className="ranking-summary"><strong>{result.ranked_cars.length} cars ranked</strong><span>Highest priority first</span></div><div className="car-rankings">{result.ranked_cars.map((car, index) => <CarCard key={car} result={result} car={car} index={index} />)}</div></> : <><div className="acv-car-stage empty-car"><img src={acvCar} alt="Ventilation carriage awaiting analysis" /></div><Empty error={selected?.error} /></>}</section>;
 }
 function DamageGauge({ result }: { result?: SHMResult }) {
   const d = result?.prediction;
@@ -41,5 +42,5 @@ export function SHMView({ batch }: { batch: Batch }) {
     ['STRESS', 'Equivalent stress amplitude', number(result.equivalent_stress_amplitude, 3), 'In the input stress units'],
     ['RANGE', 'Maximum cycle range', number(result.maximum_cycle_range, 3), 'In the input stress units'],
   ] : [];
-  return <section className="visual-column shm-view" aria-label="Structural fatigue diagnosis"><FileHeading name={selected?.name} caption="SHM / STRUCTURAL CONDITION" /><div className="shm-panel"><div className="shm-title"><h2>Structural Car<br />Fatigue Gauge</h2><span>{result ? `D = ${number(result.prediction, 6)}` : 'AWAITING DATA'}</span></div><DamageGauge result={result} />{!result && <Empty error={selected?.error} />}<div className="influencing-panel"><h2>Recording diagnostics</h2><p>Measured summaries of the stress history.</p>{diagnostics.map(([tag, title, value, note]) => <div className="diagnostic-feature" key={tag}><span className="feature-tag">{tag}</span><div><h3>{title}</h3><p>{note}</p></div><strong>{value}</strong></div>)}</div></div></section>;
+  return <section className="visual-column shm-view" aria-label="Structural fatigue diagnosis"><FileHeading name={selected?.name} caption="SHM / STRUCTURAL CONDITION" />{result && <DiagnosisSummary result={result} />}<div className="shm-panel"><div className="shm-title"><h2>Structural Car<br />Fatigue Gauge</h2><span>{result ? `D = ${number(result.prediction, 6)}` : 'AWAITING DATA'}</span></div><DamageGauge result={result} />{!result && <Empty error={selected?.error} />}<div className="influencing-panel"><h2>Recording diagnostics</h2><p>Measured summaries of the stress history.</p>{diagnostics.map(([tag, title, value, note]) => <div className="diagnostic-feature" key={tag}><span className="feature-tag">{tag}</span><div><h3>{title}</h3><p>{note}</p></div><strong>{value}</strong></div>)}</div></div></section>;
 }

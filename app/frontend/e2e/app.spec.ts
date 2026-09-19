@@ -16,6 +16,17 @@ test('home artwork, navigation, keyboard and responsive layouts', async ({ page 
   await page.goto('/');
   await expect(page.getByText('MODEL READY')).toBeVisible();
   await expect(page.getByRole('button', { name: /CC SHM/ })).toBeEnabled();
+  await expect(page.locator('.train-art image')).toHaveAttribute('href', /home-mural-/);
+  await expect(page.locator('.train-stage')).toHaveCSS('background-image', /linear-gradient/);
+  await expect(page.locator('#park-scene')).toBeVisible();
+  await expect(page.locator('[data-park-bench]')).toHaveCount(2);
+  for (const [key, colour] of Object.entries({ rail: 'rgb(3, 39, 30)', shm: 'rgb(51, 37, 0)', acv: 'rgb(3, 42, 70)', door: 'rgb(58, 16, 25)' })) {
+    const card = page.locator(`.subsystem-card.${key}`);
+    await card.hover();
+    await expect(card).toHaveCSS('background-color', colour);
+    await card.focus();
+    await expect(card).toHaveCSS('background-color', colour);
+  }
   await page.screenshot({ path: info.outputPath('home.png'), fullPage: true });
   await noOverflow(page);
   await page.getByRole('button', { name: /EW RAIL/ }).click();

@@ -9,7 +9,12 @@ export type Subsystem = 'rail' | 'door' | 'acv' | 'shm';
 export type DoorCycle = { start_time: string; end_time: string; prediction: 'Normal' | 'Abnormal resistance'; operation: 'Open' | 'Close'; confidence: number; quality_flags: string[]; boundary_reason: string };
 export type DoorResult = { subsystem: 'door'; model_version: string; file_id: string; cycles: DoorCycle[] };
 export type ACVResult = { subsystem: 'acv'; model_version: string; file_id: string; ranked_cars: string[]; car_scores: Record<string, number>; diagnostics: Record<string, Record<string, number | null>>; schema: string };
-export type SHMResult = { subsystem: 'shm'; model_version: string; file_id: string; prediction: number; cycle_count: number; equivalent_stress_amplitude: number; maximum_cycle_range: number; estimated_percentage_error: number };
+export type SHMResult = {
+  subsystem: 'shm'; model_version: string; file_id: string; prediction: number;
+  cycle_count: number; equivalent_stress_amplitude: number; maximum_cycle_range: number;
+  estimated_percentage_error: number;
+  error_indicator_kind?: 'historical_validation_p95_absolute_percentage_error' | string;
+};
 export type DiagnosticResult = RailResult | DoorResult | ACVResult | SHMResult;
 export type Health = { status: 'ready' | 'unavailable'; maximum_file_bytes: number; subsystems?: Partial<Record<Subsystem, boolean>> };
 export const modules = {
@@ -123,7 +128,9 @@ export function validResult(body: DiagnosticResult, subsystem: Subsystem): boole
     typeof c.start_time === 'string' && typeof c.end_time === 'string' && Array.isArray(c.quality_flags));
   if (body.subsystem === 'acv') return Array.isArray(body.ranked_cars) && body.ranked_cars.length > 0 &&
     new Set(body.ranked_cars).size === body.ranked_cars.length && body.ranked_cars.every(car => typeof car === 'string' && Number.isFinite(body.car_scores?.[car]) && body.diagnostics?.[car]);
-  return [body.prediction, body.cycle_count, body.equivalent_stress_amplitude, body.maximum_cycle_range].every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0);
+  return [body.prediction, body.cycle_count, body.equivalent_stress_amplitude, body.maximum_cycle_range, body.estimated_percentage_error]
+    .every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0) &&
+    (body.error_indicator_kind === undefined || typeof body.error_indicator_kind === 'string');
 }
 
 export function exportResults(results: DiagnosticResult[], subsystem: Subsystem): string {
