@@ -191,7 +191,7 @@ def main() -> None:
     )
     results["exploratory_context"] = {
         "feature_selection_macro_f1": 0.6858587709826242,
-        "source": "backend/models/rail/METHODOLOGY.md#experiment-comparison",
+        "source": "historical grouped-validation feature-family comparison",
         "meaning": "Outer score of selecting among six feature sets within inner validation, distinct from this fixed-family result.",
     }
     nested = results["nested_selection"]

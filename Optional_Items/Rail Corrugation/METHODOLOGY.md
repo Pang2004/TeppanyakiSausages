@@ -1,59 +1,81 @@
 # Rail Corrugation Methodology
 
+## Task and approach
 
-## Design assumptions and rationale
+The Rail model classifies each one-second axle-box recording as `Normal`, `Side I` or `Side II`. The labelled set contains 272 recordings: 234 Normal, 14 Side I and 24 Side II. Each recording contains 10,000 samples at 10 kHz, one tachometer channel, and vibration and shock channels for 64 axle boxes.
 
-The supplied training labels do not prescribe a development-validation split. The following choices define what our local evaluation can measure; they are modelling decisions, not requirements imposed by the organiser.
+The final `rail-pipeline-v3` combines global signal summaries with speed-adjusted local spectral evidence. A standardized, class-balanced logistic-regression classifier is trained with side-mirrored examples. Grouped inner validation selects regularization and a Side I decision-score multiplier. The production estimator is fitted on all labelled recordings after the evaluation procedure is fixed.
 
-- **Validation unit and independence assumption.** A whole recording is the evaluation unit because the target describes the recording, not an individual sample or carriage. Exact duplicate recordings share a SHA-256 group and stay in the same fold to prevent identical signals appearing in training and validation. We use distinct recording groups as the available approximation to independent examples; different hashes do not establish independence between related journeys, vehicles or recording sessions. The reported result therefore concerns held-out recording groups, not demonstrated transfer to a new fleet.
-- **Split choice.** Stratified grouped five-fold validation balances the need to retain training data with the need to evaluate all three classes. Stratification helps distribute the scarce Side I examples (14 recordings) across folds; grouping takes priority over exact class proportions. Repeating the outer split with six seeds exposes sensitivity to how these few examples are assigned. Repeats are correlated checks on the same dataset, not additional independent evidence or a confidence interval. Five folds and six repeats are practical evaluation choices, not empirically proven optimal settings.
-- **Selection and scoring.** Three inner grouped folds select regularisation and the Side I multiplier using macro F1, giving each class equal weight despite the predominance of Normal recordings. Scaling, mirroring and tuning remain within each outer training set so held-out labels cannot determine that fold's fitted decision rule. The local-feature family itself was adopted after exploratory comparisons, so nested tuning does not remove the optimism associated with that earlier family choice.
-- **Mirroring assumption.** Swapping the two rail sides is treated as preserving the underlying corrugation mechanism while exchanging Side I and Side II labels. This uses the expected symmetry to augment a small minority-class dataset. It may be imperfect if sensor calibration or operating conditions differ systematically by side; mirroring is restricted to training, while validation uses the original recordings.
-- **Deployment choice.** The local-energy family is retained because its repeated outer results improve both macro and Side I F1, despite its slightly weaker full-data inner score. This is an explicit tradeoff supported by exploratory evidence, not a guarantee of a higher hidden-test score. After choosing the procedure, fitting on all labelled recordings uses the available data for deployment; the reported F1 values belong to the validation procedure, not a separate test of the final full-data weights.
+## Feature engineering
 
-## Current model: local spectral pipeline v3
+Headers, rather than filenames, identify sensors and their physical side. Filenames are used only as recording identifiers.
 
-The classifier uses the original 855 statistical/wavelength features plus 702 local wavelength-energy features. These retain per-car band power and matched-axle side contrasts. The shared extractor also computes 192 spectral-shape features retained in the ordered input schema; the adopted classifier excludes them. Runtime extraction and the fitted estimator live entirely in `app/backend/models/rail/`, without development-package dependencies.
+The model uses three feature groups:
 
-Training mirrors the two sides only inside training folds, including swapping Side I/Side II labels and reversing signed contrasts. A standardized, class-balanced logistic model classifies each recording. Grouped inner validation selected **C=0.01 and a Side I decision-score multiplier of 4** for the full-data fit. Returned class scores remain uncalibrated model scores; the decision multiplier means their raw maximum need not equal the final predicted class.
+1. **Global time and fixed-frequency features (684):** distribution, magnitude, RMS, extrema, quantiles and Welch spectral summaries for vibration and shock, aggregated by side with side differences and ratios.
+2. **Speed-adjusted wavelength features (171):** tachometer transitions estimate mean train speed using the documented 0.85 m wheel diameter and 90-tooth wheel. Frequency is converted to wavelength bands with edges from 0.01 m to 0.64 m. Band power, dominant wavenumber, speed availability and speed variability make the spectrum comparable across operating speeds.
+3. **Local wavelength-energy features (702):** absolute and fractional band energy are retained for each of eight cars and both signal types. Matched axle positions across the two sides contribute per-car contrasts, medians, directional agreement and signed moments. These features preserve local defects that can be diluted by whole-side aggregation.
 
-The feature family was adopted after exploratory comparisons. Within it, three grouped inner folds (seed 142) select C from `[0.01, 0.1, 1, 10]` and the Side I multiplier from `[0.5, 1, 2, 4]`, using mean macro F1. The full-data inner score is 0.7110. The old feature family's best inner score is slightly higher (0.7165, C=10), while repeated outer validation favours the adopted family. That discrepancy is retained in the report; a single small inner split is not a guarantee of which model will generalise better.
+An additional 192 spectral-shape features were evaluated but excluded because they did not improve the selected procedure. A zero-transition tachometer recording receives zero wavelength features plus a speed-unavailable indicator; the global features remain usable.
 
-There are 272 labelled files: 234 Normal, 14 Side I and 24 Side II. SHA-256 grouping identifies 270 unique recordings; exact duplicate Normal pairs stay in the same fold. Scaling, augmentation and decision selection occur only within training data. Filenames are identifiers, not classifier inputs.
+Training-only side mirroring swaps the two sides, changes Side I labels to Side II and vice versa, and reverses signed contrasts. This increases minority-side examples without copying mirrored records into validation.
 
-## Validation and integration checks
+## Model selection and rationale
 
-Five grouped outer folds are repeated using seeds 42–47. The same recordings are reused across repeats; 1,632 predictions do not represent 1,632 independent recordings.
+Class-balanced logistic regression was retained because it produced the strongest repeated grouped-validation result while remaining compact and deterministic. Standardization, mirroring, estimator fitting and decision tuning are performed only on each training portion.
 
-| Procedure, same six-repeat protocol | Macro F1 | Side I F1 | Side II F1 |
+The inner search compares logistic `C` values `0.01`, `0.1`, `1` and `10`, and Side I score multipliers `0.5`, `1`, `2` and `4`. The multiplier changes the final class decision; the returned decision scores are not calibrated probabilities. The full-data search selected **C = 0.01** and a **Side I multiplier of 4**.
+
+The adopted global-plus-local procedure was compared with global-only features, local-only features, added spectral-shape features and a global/local score blend. The blend reached macro F1 0.7444 and Side I F1 0.4832, below the selected model. The selected procedure was retained because it had the best six-repeat macro F1 and improved both fault-side F1 scores. Its full-data inner score (0.7110) was slightly below the old feature family's score (0.7165), so the choice is an explicit repeated-validation trade-off rather than proof of hidden-test superiority.
+
+## Evaluation protocol
+
+SHA-256 grouping identifies 270 unique byte contents. Two duplicate Normal pairs remain in the same fold so identical recordings cannot occur in both training and validation.
+
+The outer evaluation uses five-fold `StratifiedGroupKFold`, repeated with seeds 42–47. Within each outer training portion, three grouped inner folds with fixed seed 142 select `C` and the Side I multiplier using macro F1. The untouched outer fold is then predicted. The reported values average fold scores across all six repeats.
+
+The 1,632 stored outer predictions were reproduced exactly after production integration. They are repeated predictions of 272 recordings, not 1,632 independent examples.
+
+## Metrics and why they suit the task (Section 3.2)
+
+**Macro F1** is the primary metric because the three classes are highly imbalanced. It gives Normal, Side I and Side II equal importance and penalizes both false alarms and missed defects. Accuracy would be dominated by the 234 Normal recordings.
+
+**Side I F1** and **Side II F1** are reported separately because macro F1 can conceal which physical side remains difficult. F1 is appropriate for both fault classes because technicians need reasonable precision as well as recall: excessive false alarms and missed corrugation are both costly.
+
+## Results
+
+| Procedure on the same six-repeat grouped protocol | Macro F1 | Side I F1 | Side II F1 |
 | --- | ---: | ---: | ---: |
-| Old original/wavelength procedure | 0.7095 | 0.4097 | 0.7623 |
-| Adopted local-energy + decision tuning | **0.7609** | **0.5124** | **0.8006** |
+| Previous global statistical/wavelength procedure | 0.7095 | 0.4097 | 0.7623 |
+| **Selected local-energy procedure** | **0.7609** | **0.5124** | **0.8006** |
 
-These are means of fold scores. Seed 42's pooled out-of-fold result is 0.7977 macro / 0.6207 Side I, but Side I does not consistently reach 0.60 across repeats. The feature family was selected after earlier experiments and error review: the table is an exploratory validation estimate, not an independent hidden-test result. Labels for the 68 supplied test files are unavailable.
+One favourable repeat produced pooled macro F1 0.7977 and Side I F1 0.6207, but Side I did not consistently reach 0.60 across repeats. Across all repeats, the selected procedure produced 47 Side I true positives, 53 false positives and 37 false negatives. The six-repeat result is therefore the headline estimate.
 
-Production integration refitted the selected estimator on every outer training fold and **reproduced all 1,632 held-out predictions exactly**. The saved research inner searches were retained rather than rerun in replay mode. Original raw-file hashes were checked, local spectra were freshly extracted for all 272 files, and combined features were independently re-extracted for representative normal and difficult Side I recordings before fitting. The normal training command reruns nested selection from scratch; replay mode checks the existing completed evaluation.
+The supplied 68 test recordings have no published labels. Their predictions are submission outputs, not an accuracy measurement.
 
-See [Local spectral investigation](LOCAL_SPECTRA_STUDY.md) for the full search, split-sensitivity results, remaining errors and failed blending experiment. Train202 is a known regression; the consistently missed examples and false alarms remain important limitations.
+## Assumptions and limitations
 
-## Runtime, reproduction and rollback
+- A complete recording is the prediction and validation unit. Different file hashes are treated as the best available approximation to independent examples, but may still represent related journeys, vehicles or sessions.
+- Five folds and six repeats are practical choices for distributing only 14 Side I recordings; repeated folds are correlated sensitivity checks, not a confidence interval.
+- Mirroring assumes the physical fault mechanism is comparable across sides. Persistent sensor-calibration or operating differences between sides could violate this symmetry.
+- Mean recording speed is used instead of instantaneous order tracking. Stationary operation and tachometer failure cannot be distinguished from the tachometer signal alone.
+- The local feature family was selected after exploratory comparisons on the same labelled collection. Nested hyperparameter tuning does not remove that broader research-selection optimism.
+- The final model is fitted on all labelled data for deployment. Reported F1 belongs to the validation procedure, not an independent test of the final full-data weights.
 
-The active artifact is `app/backend/artifacts/rail_pipeline.joblib`, version `rail-pipeline-v3`. `RailPredictor` checks base, wavelength and local configurations before inference, and still supports older v1/v2 artifacts. The callable API and official `file_id,prediction` CSV schema are unchanged.
+## Reproduction and artifacts
+
+From the repository root, with the separately supplied dataset available:
 
 ```bash
-OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 .venv/bin/python scripts/model.py rail train \
-  --data-dir PS3/02_Datasets/Rail_Corrugation
-
-# Reproduce the integration using the completed research inner-search report:
-OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 .venv/bin/python scripts/model.py rail train \
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python Optional_Items/tools/model.py rail train \
   --data-dir PS3/02_Datasets/Rail_Corrugation \
-  --replay-report 'Optional_Items/Rail Corrugation/code/outputs/local_study/decisions/cv_results.json'
+  --model-out app/backend/artifacts/rail_pipeline.joblib
 
-.venv/bin/python scripts/model.py rail predict \
+python Optional_Items/tools/model.py rail predict \
   --input PS3/02_Datasets/Rail_Corrugation/Test \
-  --output 'Optional_Items/Rail Corrugation/code/outputs/rail_predictions.csv'
+  --model app/backend/artifacts/rail_pipeline.joblib \
+  --output "Optional_Items/Rail Corrugation/code/outputs/rail_predictions.csv" \
+  --diagnostics-output "Optional_Items/Rail Corrugation/code/outputs/diagnostics.json"
 ```
 
-The previous active model is preserved at `app/backend/artifacts/rail_pipeline_baseline_v2.joblib`; its reports, predictions and methodology are under `code/outputs/baseline_v2/`. Passing that artifact with `--model` reproduces previous CLI inference; setting `RAIL_MODEL_PATH` to its path and restarting the API restores it in the app. Training scripts do not automatically create rollback copies, so use `--model-out` when experimenting.
-
-The original feature cache uses source hashes and configuration checks. The local feature cache additionally records its extractor-code hash. The legacy v2 trainer remains available explicitly as `rail_dev.train`; `scripts/model.py rail train` now invokes `rail_dev.train_local`.
+The active artifact is `app/backend/artifacts/rail_pipeline.joblib`. Evaluation reports and feature provenance are stored under `Optional_Items/Rail Corrugation/code/outputs/`. The official prediction file contains only `file_id,prediction`.

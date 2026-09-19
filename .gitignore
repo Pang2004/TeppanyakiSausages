@@ -17,3 +17,4 @@ app/exports/
 .DS_Store
 .idea/
 .vscode/
+.submission-backups/

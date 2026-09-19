@@ -1,109 +1,98 @@
 # Door Fault-Diagnosis Methodology
 
+## Task and approach
 
-## Design assumptions and rationale
+The Door pipeline receives a continuous telemetry stream, identifies each opening or closing movement, and classifies that operation as `Normal` or `Abnormal resistance`. One prediction represents one movement, not an open/close pair.
 
-No development split is supplied for the single labelled continuous stream. The choices below reflect the intended use of diagnosing later door operations from earlier labelled examples.
+The training stream contains 110 labelled operations: 80 Normal and 30 Abnormal resistance. The final system uses gap-aware and state-machine segmentation followed by a standardized, class-balanced logistic-regression classifier. The fitted classifier uses all 110 labelled operations after chronological validation.
 
-- **Chronological split.** Five expanding-window folds train on earlier operations and evaluate the following 18-operation block. This avoids learning from future operations and keeps samples from one movement together. Randomly splitting telemetry rows would allow near-identical samples from the same operation into both sets. The initial 20 operations provide a training prefix, leaving 90 later operations for evaluation; this is a practical allocation for the 110-operation stream, not an organiser-defined or uniquely optimal split.
-- **Scope of the generalisation assumption.** Earlier operations are assumed to provide useful evidence for later operations in the same recording format. Chronological separation does not make the source stream independent, and no physical-door identifiers are available for a leave-one-door-out evaluation. We therefore claim retrospective later-operation performance, not validated transfer to a new installed door or arbitrary starts midway through a movement.
-- **Boundary evaluation.** A prediction is one opening or closing movement. Ground-truth intervals come from the supplied annotations, while the detector runs independently on raw validation blocks. This is necessary because using detected boundaries as both truth and prediction would hide segmentation errors. Splits are placed between complete annotated operations; the evaluation does not measure online detection delay.
-- **Segmentation assumptions.** Large timestamp gaps are interpreted as separators in the supplied recording format. The five-cadence/minimum-100-ms rule assumes such gaps usually separate movements rather than represent missing samples within a movement. The fallback state machine's 500-ms terminal dwell and 10-second maximum are engineering choices for stable endings and bounded segments, not universal door specifications. The corruption audit shows where these assumptions fail; its results were not used to retune thresholds against the same evaluation blocks.
-- **Classifier choice and score interpretation.** Logistic regression is retained when learned candidates tie because it provides a compact standardised model without the additional complexity of the nonlinear alternatives. Candidates are compared on the official boundary-and-label score because classification accuracy alone would ignore missed or misplaced segments. Selecting among candidates on these folds is not nested selection, and the stream informed earlier development; the perfect local score must retain that qualification.
+## Operation segmentation
 
-## Task and Data Interpretation
+Timestamps are parsed and checked for increasing order. The primary segmenter estimates the median sampling cadence and splits blocks when the timestamp gap exceeds five times that cadence, subject to a minimum threshold of 100 ms. This reproduces the boundaries in the supplied 20 ms telemetry format.
 
-The Door pipeline receives one continuous telemetry stream and must first find each door movement, then classify that movement as `Normal` or `Abnormal resistance`. One prediction represents one opening or one closing operation—not an open/close pair. The supplied data contains no train, car, or physical door identifier, so the model does not claim to identify which installed door produced an operation.
+A direction-aware state machine supports streams without large gaps. Command, activity, position and terminal-switch states determine the start, direction and end of a movement. A stable terminal state is required for 500 ms, and a 10-second maximum bounds incomplete movements. Position is normalized to each movement's local range instead of assuming universal raw position limits.
 
-The training stream contains 110 labelled operations: 80 Normal and 30 Abnormal resistance. Samples inside an operation are normally 20 ms apart. Recorded operations are separated by gaps of at least 10 seconds, whereas the test stream contains 38 operations in the same format. The official score combines temporal overlap and the predicted label, so reliable boundaries are as important as classification.
+Each result retains its boundary reason and quality flags so incomplete or malformed operations remain visible rather than silently becoming Normal predictions.
 
-## Segmentation
+## Feature engineering
 
-Timestamps are parsed from `year-month-day-hour-minute-second-millisecond` strings and checked for increasing order. The pipeline estimates the median positive sampling interval and splits recorded blocks where the time delta exceeds five times that cadence, with a minimum split threshold of 100 ms. This gap-based method exactly reproduces all 110 supplied training boundaries, operations, and row counts.
+The classifier uses 177 deterministic features per operation:
 
-A direction-aware state machine is also implemented for genuinely continuous uploads where large gaps do not exist. It starts an operation from command and activity flags, infers direction from the door position and switch states, and requires a stable terminal state for 500 ms before ending the segment. A 10-second maximum prevents an incomplete movement from consuming the rest of the stream. Position is interpreted relative to the movement's local range instead of assuming that `0` and `700` are universal calibrations. The labelled data includes a short terminal dwell, so segmentation deliberately does not stop at the first terminal-position sample.
+- duration, sample count and opening/closing direction;
+- mean, standard deviation, extrema, quantiles, range, RMS, first-difference magnitude and peak position for motor current, voltage, back-EMF and door position;
+- each continuous signal interpolated to 20 normalized-time points to preserve waveform shape across different operation durations;
+- locally normalized door position;
+- configured opening and closing times; and
+- start value, end value, mean and transition count for command, activity, opened, close-switch and lock-switch channels.
 
-Each segment carries its boundary reason and quality flags. These diagnostics make malformed or incomplete operations visible to the app without silently discarding them.
+The constant `Door Locked` field is excluded. All preprocessing and scaling are fitted within the model pipeline, and extracted features must be finite.
 
-## Feature Engineering
+## Model selection and rationale
 
-The final classifier uses 177 deterministic features per operation. Duration, sample count, and opening-versus-closing direction provide operation context. Motor current, voltage, back-EMF, and door position each contribute mean, standard deviation, extrema, quantiles, range, RMS, first-difference magnitude, and peak location. Each signal is also interpolated to 20 normalized-time points, preserving waveform shape even when operations have different durations. Position is locally normalized before interpolation.
+Four fixed candidates were compared: Always Normal, balanced logistic regression, a balanced RBF SVM with calibration, and balanced ExtraTrees with 500 trees.
 
-The configured opening and closing times contribute median values. Command, activity, opened, close-switch, and lock-switch channels contribute start value, end value, mean, and transition count. `Door Locked` is omitted because it is constant in the supplied streams. All preprocessing is performed inside the fitted pipeline, and extracted features must be finite.
+All three learned candidates reached the same score on the chronological evaluation. Logistic regression was retained because it was the first learned candidate under the predefined tie-break, uses fewer parameters than the nonlinear alternatives, and gives a compact deterministic artifact. The choice is based on end-to-end segmentation and classification, not operation-level classification alone.
 
-## Model Selection
+## Evaluation protocol
 
-Four candidates were compared:
+Five expanding-window folds train only on earlier operations and evaluate the following 18 complete operations. Training sizes are 20, 38, 56, 74 and 92 operations, producing 90 distinct later-operation predictions.
 
-| Candidate | Purpose |
-| --- | --- |
-| Always Normal | Establish the class-imbalance baseline |
-| Standardized balanced logistic regression | Linear, interpretable classifier with minority-class weighting |
-| Standardized balanced RBF SVM with sigmoid calibration | Non-linear comparison model |
-| 500-tree balanced ExtraTrees | Tree-based comparison model |
+The detector runs afresh on each raw held-out block. Ground-truth boundaries and labels come independently from the supplied annotation file; predicted segments are not reused as truth. This allows missing, duplicate or misplaced operations to affect the score. Scaling, fitting and SVM calibration use only earlier operations in each fold.
 
-### Forward validation against independent annotations
+## Metrics and why they suit the task (Section 3.2)
 
-The production training command now compares these fixed candidates with five expanding-window folds. Training sizes are 20, 38, 56, 74 and 92 operations; each following validation block contains 18 operations. This evaluates 90 distinct operations once each. No validation operation or later operation enters that fold's fitting, scaling or SVM calibration. SVM calibration uses only the earlier training subset.
+The **official temporal-overlap/classification score** is primary because a useful prediction must locate the operation and assign the correct label. Classification F1 alone could appear strong even if the detector missed movements or placed their boundaries incorrectly.
 
-Supervised training features use the annotated intervals, with direction inferred from telemetry. For validation, the detector runs afresh on each contiguous raw validation block. Ground-truth times and labels come directly from `Train_Segments_Answer.csv`, independently of the detector. Missing detections, extra detections, wrong boundaries and wrong labels all affect the official score. Splits occur between annotated operations; this evaluates complete operations in held-out blocks, not arbitrary upload starts or online prediction latency.
+The **localization score** applies the same matcher while treating all operations as one class, isolating boundary quality. The **abnormal-only official score** exposes performance on the less frequent and operationally important resistance faults. These supporting metrics separate segmentation failure from class-label failure.
 
-`Optional_Items/Door/code/outputs/cv_results.json` records all four candidates, fold memberships, training cutoffs, independently sourced truth, and actual predicted intervals. Training selects the largest mean official score; the existing candidate order breaks learned-model ties in favour of logistic regression. This comparison is not nested model selection. The incumbent was already developed on this stream, so the results are a stronger retrospective check, not an untouched independent benchmark.
+## Results
 
-| Candidate | Earlier-to-later official score | Localization score | Abnormal-only official score |
+| Candidate | Official score | Localization | Abnormal-only official score |
 | --- | ---: | ---: | ---: |
 | Always Normal | 0.7444 | 1.0000 | 0.0000 |
-| Balanced logistic regression | 1.0000 | 1.0000 | 1.0000 |
+| **Balanced logistic regression** | **1.0000** | **1.0000** | **1.0000** |
 | Balanced RBF SVM | 1.0000 | 1.0000 | 1.0000 |
 | Balanced ExtraTrees | 1.0000 | 1.0000 | 1.0000 |
 
-All learned models score 1.0 in each of the five folds. Logistic regression is retained. The final estimator is fitted on all 110 operations. Its fitted scaler and classifier parameters are exactly identical to the prior artifact; all 38 unlabelled test predictions, probabilities and diagnostics are unchanged. The artifact's validation metadata has been refreshed.
+The selected model detected and correctly classified all 90 later operations in the supplied format. This perfect retrospective result does not establish transfer to another physical door.
 
-### Historical results and corrected interpretation
+A fixed corruption audit illustrates recording sensitivity:
 
-The old five-block validation trained on the complement of each block, including later operations. It was blocked cross-validation, not a forward-only forecast. It also constructed both truth and predictions from detected segment boundaries, so it could not measure segmentation mistakes independently. Its official scores were 1.000 for all learned models and 0.7273 for Always Normal. The prior logistic repeated-stratified macro F1 was 0.99596. These historical numbers use different folds and should not be treated as gains or losses against the new 90-operation evaluation.
+| Held-out condition | Official score | Localization |
+| --- | ---: | ---: |
+| Original stream | 1.0000 | 1.0000 |
+| Remove every tenth interior sample, retaining endpoints | 1.0000 | 1.0000 |
+| Remove ten midpoint samples per operation | 0.1703 | 0.3114 |
+| Set midpoint command/activity flags inactive | 0.1753 | 0.3220 |
+| Remove the last 10% of each operation | 0.5510 | 0.9019 |
+| Compress gaps between operations | 0.2989 | 0.3212 |
 
-### Recording robustness
+These transformations are robustness diagnostics, not additional independent test cases. They show that interrupted movements and removed idle gaps can break the supplied-format segmentation assumptions.
 
-`python scripts/model.py door validation` audits the fixed incumbent with the same forward folds. Training is clean in every scenario; only held-out streams are transformed. The six transformations were fixed before inspecting their scores. They do not use fault labels to choose where to corrupt the data. Annotated intervals locate the corruptions; original reference times are retained except for the explicitly time-translated scenario.
+## Assumptions and limitations
 
-| Held-out recording condition | Official score | Localization score | Detected / true operations |
-| --- | ---: | ---: | ---: |
-| Original stream | 1.0000 | 1.0000 | 90 / 90 |
-| Remove every tenth interior sample; retain endpoints | 1.0000 | 1.0000 | 90 / 90 |
-| Remove 10 midpoint samples (200 ms of samples) per operation | 0.1703 | 0.3114 | 180 / 90 |
-| Set command and activity flags inactive for 5 midpoint samples (100 ms) | 0.1753 | 0.3220 | 180 / 90 |
-| Remove the last 10% of samples per operation | 0.5510 | 0.9019 | 90 / 90 |
-| Compress inter-operation gaps to 20 ms without inserting idle rows | 0.2989 | 0.3212 | 30 / 90 |
+- Earlier operations are assumed to be informative for later operations in the same recording format. The single stream supplies no train, car or installed-door identifier, so leave-one-door-out validation is impossible.
+- Splits are placed between complete annotated movements. The evaluation does not measure arbitrary mid-movement upload starts or online detection delay.
+- Large timestamp gaps are assumed to separate movements. The 100 ms minimum gap, 500 ms terminal dwell and 10-second maximum are engineering decisions because the documentation does not specify universal segmentation thresholds.
+- Candidate comparison is not nested, and the labelled stream informed earlier development. The 1.0000 result is a retrospective check, not an untouched benchmark.
+- Confidence values describe the classifier on extracted complete-operation features; they do not quantify boundary uncertainty or guarantee physical safety.
 
-Scores are means over five folds. Localization uses the same official matcher with all labels replaced by a common operation label. It isolates boundary/detection quality; it is not the competition metric. Abnormal-only scores, fold results and the full prediction/truth pairs are available in `Optional_Items/Door/code/outputs/validation_results.json`, alongside input hashes and feature configuration.
-
-A ten-sample loss creates a 220 ms timestamp gap, exceeding the current 100 ms split threshold. Brief inactive flags also end a movement immediately. Both therefore split one movement into two; classification on the resulting partial waveforms deteriorates as well. Truncation directly limits recoverable end-time overlap and changes classifier inputs. Compressed gaps expose limited support for adjacent movements without an idle/reset interval, especially successive movements in the same direction. This synthetic scenario does not establish that such timing is physically representative.
-
-These findings support retaining the current classifier for the supplied recording format, while limiting claims about continuous or interrupted streams. They do not justify choosing gap/debounce thresholds from these outer validation scores. A segmentation change should be evaluated on separately annotated interrupted recordings, with threshold selection confined to training data. The current module and tests remain as production validation tools; there are no unused experiment runners or experiment test folders.
-
-## Validation-Backed Estimate
-
-The strongest available retrospective estimate is **1.000 official score on 90 later operations**, with exact boundaries and correct labels for all 90. This is not a guaranteed organiser score. Only one source recording is available, physical door identifiers are absent, and the model has previously been developed on these labels. Performance on a new door, operating condition, or recording interruption remains uncertain.
-
-The unlabelled test output contains 38 segments: 30 predicted Normal and 8 predicted Abnormal resistance. This distribution is a prediction summary, not an accuracy measurement.
-
-## Reproduction and Interface
+## Reproduction and artifacts
 
 ```bash
-python scripts/model.py door validation \
+python Optional_Items/tools/model.py door validation \
   --data-dir PS3/02_Datasets/Door \
   --output Optional_Items/Door/code/outputs/validation_results.json
 
-python scripts/model.py door train \
+python Optional_Items/tools/model.py door train \
   --data-dir PS3/02_Datasets/Door \
   --model-out app/backend/artifacts/door_pipeline.joblib
 
-python scripts/model.py door predict \
+python Optional_Items/tools/model.py door predict \
   --input PS3/02_Datasets/Door/Test.csv \
   --model app/backend/artifacts/door_pipeline.joblib \
   --output Optional_Items/Door/code/outputs/door_predictions.csv \
   --diagnostics-output Optional_Items/Door/code/outputs/diagnostics.json
 ```
 
-The Python adapter returns timestamps, label, confidence, inferred operation, boundary reason, and quality flags. The official CSV intentionally contains only `start_time,end_time,prediction`, ordered chronologically.
+The active artifact is `app/backend/artifacts/door_pipeline.joblib`. Machine-readable candidate, fold and robustness results are under `Optional_Items/Door/code/outputs/`. The official single-stream CSV contains `start_time,end_time,prediction` in chronological order.

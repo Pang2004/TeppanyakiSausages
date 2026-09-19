@@ -1,100 +1,105 @@
 # SHM Cumulative-Fatigue Methodology
 
+## Task and approach
 
-## Design assumptions and rationale
+The Structural Health Monitoring model predicts one positive cumulative-fatigue damage value for each dynamic-stress history. The dataset contains 64 labelled training histories and 16 unlabelled test histories. Each official file is a headerless, single-column CSV with 581,120 stress samples.
 
-The supplied data gives one damage target per complete stress history but no official development split or per-file vehicle, load-group or chronological labels.
+The final model combines a physics-based rainflow/Miner estimate with a regularized data-driven residual correction. The physical component supplies the main damage magnitude; Ridge regression corrects systematic signal-shape effects that the single Miner sum does not capture.
 
-- **Whole-history split.** Each history is kept intact because its target is accumulated damage across the entire signal. Splitting rows from one history across training and validation would share the same physical event and would not produce independent labelled examples. Leave-one-file-out evaluation uses all 64 histories once as held-out units while retaining 63 for each fit, a practical use of a small labelled dataset.
-- **Independence limitation.** Distinct files are the only available grouping unit; we do not assume that distinct hashes prove independent acquisition. Source histories may be related through line, vehicle or load condition. A group-aware or chronological split would be preferable for testing those deployment shifts, but cannot be constructed reliably without the missing identifiers. Current scores therefore assess held-out files within the supplied collection, not unseen-line or unseen-vehicle performance.
-- **Nested selection.** Five-fold inner validation selects the S–N exponent, Ridge strength and residual-correction family without using the outer file's target. Five inner folds balance tuning coverage and training-set size; seed 42 fixes reproducibility rather than being selected as the best-scoring seed. Seeds 43 and 44 probe sensitivity. The 0.002 MAPE improvement gate, with no deterioration in the inner 95th-percentile error, favours the simpler physical model when the residual gain is small or worsens large errors; this gate is a modelling choice, not an organiser rule.
-- **Physical calibration.** Rainflow counting and linear Miner accumulation follow the supplied target description. The material exponent and scale are unspecified, so they are calibrated from labelled histories instead of assigning undocumented material constants. This assumes consistent input stress units and target definitions across the training and prediction files. A different material, load regime or unit convention could invalidate that calibration.
-- **Loss and interpretation.** Selection minimises MAPE because the official score is derived from it, using the supplied positive damage targets. The historical error percentile describes held-out errors across files and is not a per-recording confidence interval. The final full-data fit maximises available training information after selecting the procedure; neither its damage output nor the UI percentage is a validated estimate of remaining life or a structural-safety verdict.
+## Feature engineering
 
-## Task and Physical Model
+The loader preserves the first stress sample by explicitly treating the CSV as headerless and rejects multi-column, non-numeric, non-finite or very short histories. Filenames are identifiers and are not features.
 
-The Structural Health Monitoring pipeline predicts one positive cumulative fatigue-damage value for each dynamic-stress history. The official score is `max(0, 1 - MAPE)`, so model selection directly minimizes percentage error rather than squared error.
-
-The dataset contains 64 labelled training files and 16 held-out files. Every official file is a headerless, single-column CSV with 581,120 stress samples. Each complete history is one validation unit; individual samples are never split between training and validation. Statistical independence between files is not established: the reference describes measurements from two lines and two load conditions, but supplies no per-file group identifiers or recording chronology. All recordings are from healthy operating conditions; the target is accumulated fatigue damage, not observed structural failure. Filenames are randomized identifiers and are not features.
-
-The reference description states that targets are based on rainflow cycle counting and Miner's linear damage rule. For an S–N relation `N = C / amplitude^m`, cumulative damage is proportional to:
+Rainflow counting extracts cycle ranges and counts. For an S–N relation `N = C / amplitude^m`, damage is proportional to:
 
 ```text
 sum(cycle_count * (cycle_range / 2) ** m)
 ```
 
-The S–N exponent and multiplicative constant are not supplied. They are therefore calibrated from labels rather than assumed from an undocumented material specification.
+Because the documentation does not provide the material exponent or multiplicative constant, candidate exponents `m = 3, 4, 5, 6, 7` and the damage scale are calibrated from labelled histories.
 
-## Rainflow and Signal Features
+The feature set contains:
 
-The loader preserves the first stress sample by explicitly reading the CSV without a header and rejects multi-column, non-numeric, non-finite, or very short histories. Rainflow cycles are extracted locally with `rainflow==3.2.0`, which implements ASTM E1049-style counting. Prediction makes no network request and does not upload stress data.
+- Miner proxies and equivalent stress amplitudes for the candidate exponents;
+- total cycle count, maximum and weighted mean range, range standard deviation and mean cycle stress;
+- weighted cycle-range quantiles through the 99.9th percentile;
+- signal mean, standard deviation, RMS, range, skewness, kurtosis and tail quantiles;
+- centered-amplitude quantiles, first-difference statistics and zero-crossing rate; and
+- the distribution of ranges across 128 consecutive blocks to represent non-stationary high-load periods.
 
-For candidate exponents `m = 3, 4, 5, 6, 7`, the pipeline computes a Miner proxy and equivalent stress amplitude. Additional cycle features include total cycle count, maximum and weighted mean range, range standard deviation, mean cycle stress, and weighted range quantiles through the 99.9th percentile.
+The Miner scale is estimated as a weighted median of target-to-proxy ratios. Residual features are standardized inside each training fold before Ridge fitting.
 
-Compact residual features describe information not completely captured by the Miner sum: signal mean, standard deviation, RMS, range, skewness, kurtosis, tail quantiles, centered-amplitude quantiles, first-difference statistics, and zero-crossing rate. The history is also divided into 128 blocks whose range distribution captures non-stationary high-load periods. These features are used only to correct the physical prediction; the main magnitude still comes from accumulated rainflow damage.
+## Model selection and rationale
 
-## Nested Validation and Final Model
+Nested validation selects the S–N exponent, Ridge strength and whether the residual correction should be used. Ridge `alpha` is searched over `0.1`, `1`, `10` and `100`.
 
-Outer leave-one-file-out validation holds out one complete stress history at a time. Within the remaining 63 files, shuffled five-fold validation selects the S–N exponent from `3,4,5,6,7` using physics-model MAPE. Using that exponent, it selects Ridge alpha from `0.1,1,10,100`. Every inner fit estimates the Miner scale and, for Ridge, fits standardization and regression using only that inner training subset. The scale is the weighted median of target-to-proxy ratios, with weights proxy/target, which minimizes training MAPE for multiplicative calibration.
+The residual model is retained within an outer fold only when its inner-validation MAPE improves by at least 0.002 without worsening the inner 95th-percentile absolute percentage error. This gate favors the simpler calibrated Miner model unless the correction gives a meaningful average improvement without increasing large errors.
 
-The existing correction gate is now applied **inside each outer training fold**: inner residual MAPE must improve by at least `0.002` (0.2 percentage points), without worsening the inner 95th-percentile absolute percentage error. The selected family is then fitted on all 63 outer training files and predicts the untouched 64th file. The outer label enters only the final scoring. Inner scores used for tuning are not reported as generalization estimates.
+The full-data procedure selects Miner + Ridge with **m = 5** and **alpha = 1.0**. It is preferred to a purely statistical regressor because it preserves the documented fatigue mechanism and needs the learned model only for a smaller residual correction.
 
-Previously, the gate compared the two families' outer errors and reported the winning family's outer score. That evaluated hyperparameter tuning but did not independently evaluate family selection. The corrected primary result evaluates the entire selection procedure. Its fixed seed remains 42; seeds 43 and 44 are sensitivity checks and are not selected by their outcomes.
+## Evaluation protocol
 
-The primary run selects exponent `m=5` in every outer fold. Alpha `1.0` is selected in 62 folds and `10.0` in two. The family gate selects Miner + Ridge in 63 folds and Miner alone in one. Applied to all 64 training files, the inner selection chooses Miner + Ridge, `m=5`, alpha `1.0`. The retained scale is `1.3602318550841183e-09`. The production artifact keeps its exact existing fitted parameters and refreshes validation metadata; all 16 test-file predictions agree with the existing submission CSV to numerical precision.
+Outer leave-one-file-out validation holds out each complete history once and fits on the remaining 63. Individual samples from one history never cross folds because the target represents accumulated damage over the complete signal.
 
-## Validation Results
+Within every outer training set, shuffled five-fold validation selects the exponent, Ridge alpha and model family. Scale estimation, standardization and regression use only that inner training subset. Fixed seed 42 defines the primary procedure; seeds 43 and 44 are sensitivity checks rather than candidates selected by their final outcomes.
+
+After evaluation, the selected procedure is fitted to all 64 labelled histories for deployment.
+
+## Metrics and why they suit the task (Section 3.2)
+
+**Mean absolute percentage error (MAPE)** is primary because damage values are positive and vary substantially in magnitude. Percentage error measures relative accuracy across both small and large damage values. It also directly determines the official score:
+
+```text
+official_score = max(0, 1 - MAPE)
+```
+
+The **95th-percentile absolute percentage error** and maximum absolute percentage error expose tail risk that an average can hide. The historical 95th percentile is shown by the application as an evaluation indicator; it is not a per-file confidence interval or guaranteed error bound.
+
+## Results
 
 | Approach | MAPE | Official score | 95th-percentile absolute percentage error |
 | --- | ---: | ---: | ---: |
 | Weighted constant | 58.3121% | 0.416879 | — |
 | Global-range power model | 27.6468% | 0.723532 | — |
-| Calibrated Miner family, inner exponent selection | 2.5444% | 0.974556 | 8.9458% |
-| Miner + Ridge family, inner exponent/alpha selection | 2.2694% | 0.977306 | 6.7090% |
-| **Complete nested family-selection procedure, seed 42** | **2.2978%** | **0.977022** | **6.7090%** |
+| Calibrated Miner family | 2.5444% | 0.974556 | 8.9458% |
+| Fixed Miner + Ridge family | 2.2694% | 0.977306 | 6.7090% |
+| **Complete nested family-selection procedure** | **2.2978%** | **0.977022** | **6.7090%** |
 
-The fixed-family rows are useful comparisons; choosing a family from those outer results and quoting its winning score would reuse the evaluation data. The primary selected-procedure result is therefore 0.977022, replacing the earlier headline 0.977306. This change corrects the estimate; it is not a measured improvement to the deployed predictor. Maximum absolute percentage error for the primary selected procedure is 8.7531%.
+The complete nested procedure is the primary estimate because selecting the better fixed-family row after seeing its outer result would reuse evaluation data. Its maximum absolute percentage error is 8.7531%.
 
-### Inner-split sensitivity
+| Inner split seed | Nested MAPE | Nested official score |
+| --- | ---: | ---: |
+| 42, primary | 2.2978% | 0.977022 |
+| 43 | 2.5858% | 0.974142 |
+| 44 | 2.3514% | 0.976486 |
 
-| Inner split seed | Nested MAPE | Nested official score | Outer folds selecting Ridge | Full-data family |
-| --- | ---: | ---: | ---: | --- |
-| 42 (primary) | 2.2978% | 0.977022 | 63 / 64 | Miner + Ridge |
-| 43 | 2.5858% | 0.974142 | 42 / 64 | Miner + Ridge |
-| 44 | 2.3514% | 0.976486 | 60 / 64 | Miner + Ridge |
+These sensitivity runs reuse the same 64 histories and do not form 192 independent test cases.
 
-All three full-data selections retain the existing family. The outer gate is sensitive to the small sample and the modest residual improvement: seed 43's selected procedure is slightly worse than the primary fixed-physics result. These runs reuse the same 64 histories and are not 192 independent test examples or a confidence interval. They support retaining the model while avoiding claims that the small Ridge gain is robust across all splits.
+## Assumptions and limitations
 
-### Data and cache checks
+- A complete file is the validation unit. Distinct hashes do not prove that histories come from independent vehicles, lines, loads or time periods because those group identifiers are unavailable.
+- Leave-one-file-out validation estimates performance within the supplied collection, not transfer to an unseen vehicle, line, material or load regime.
+- Rainflow counting and linear Miner accumulation follow the task description. Calibrating the missing S–N exponent and scale assumes consistent stress units, structural details and target definitions between training and inference.
+- Five inner folds, seed 42 and the 0.002 correction gate are reproducible engineering choices where the documentation left selection rules open; they are not organizer-prescribed constants.
+- The labelled histories describe healthy operating data and accumulated fatigue, not observed structural failure. The prediction is not a remaining-life estimate or a structural-safety verdict.
+- The physical sum supports varying history lengths, but the residual model and reported scores were validated only on equal-length official files.
 
-All 64 raw training files have distinct SHA-256 hashes. Fresh feature extraction from every raw history agrees with the stored feature table within `1e-12` relative/absolute numerical tolerance. Cache reuse now verifies raw hashes, feature configuration, extractor source hash, package versions and the feature CSV's own hash. A changed input/configuration or edited cache triggers extraction. Duplicate histories stop training with a request for grouped validation rather than allowing duplicates across file-level folds. Distinct hashes do not rule out related or overlapping source recordings.
-
-`Optional_Items/SHM/code/outputs/cv_results.json` contains the primary inner candidate scores, outer memberships, per-file predictions for both families and the selection procedure, final selection, and input provenance. `Optional_Items/SHM/code/outputs/validation_sensitivity.json` records the two additional seeds. `Optional_Items/SHM/code/outputs/train_features.manifest.json` records cache provenance. The validation module and tests support the final model; no unused experiment runner or experiment test directory is retained.
-
-### Error indicator and remaining limits
-
-The API field `estimated_percentage_error` is retained for compatibility. Its value, approximately **0.06709**, is the **historical 95th percentile of absolute percentage errors across the 64 outer predictions**. It is the same number for every uploaded file. Diagnostics explicitly identify it with `error_indicator_kind`; it is not a file-specific error estimate, a ±6.71% prediction interval, or a guarantee of 95% coverage. The percentile is based on a small sample and varies with the validation split.
-
-These results are retrospective checks on previously used labelled histories, not an untouched external benchmark. File-level validation cannot establish transfer to an unseen line, vehicle, load group or damaged structure without the missing group labels and new recordings. Different structural details, stress units, recording lengths or load regimes could shift calibration. The physical sum supports varying history lengths, but the residual model and measured scores have only been validated on equal-length files.
-
-The 16 unlabelled test predictions range from `0.02794` to `0.82158`, with median `0.06471`. These values are finite and positive; without held-out reference damage they are not accuracy measurements.
-
-## Reproduction and Interface
+## Reproduction and artifacts
 
 ```bash
-python scripts/model.py shm train \
+python Optional_Items/tools/model.py shm train \
   --data-dir PS3/02_Datasets/SHM \
   --model-out app/backend/artifacts/shm_pipeline.joblib
 
-python scripts/model.py shm validation \
+python Optional_Items/tools/model.py shm validation \
   --data-dir PS3/02_Datasets/SHM \
   --inner-seeds 43 44
 
-python scripts/model.py shm predict \
+python Optional_Items/tools/model.py shm predict \
   --input PS3/02_Datasets/SHM/Test \
   --model app/backend/artifacts/shm_pipeline.joblib \
   --output Optional_Items/SHM/code/outputs/shm_predictions.csv \
   --diagnostics-output Optional_Items/SHM/code/outputs/diagnostics.json
 ```
 
-The callable adapter returns predicted damage, counted cycles, equivalent amplitude, maximum cycle range, and the historical validation-error percentile. The official CSV contains only `file_id,prediction`. Feature tables, validation reports, diagnostics, predictions, and the trained artifact are tracked so teammates reproduce the same final deliverables.
+The active artifact is `app/backend/artifacts/shm_pipeline.joblib`. Nested-validation reports, sensitivity checks and feature provenance are stored under `Optional_Items/SHM/code/outputs/`. The official CSV contains only `file_id,prediction`.
