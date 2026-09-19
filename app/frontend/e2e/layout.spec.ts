@@ -59,21 +59,51 @@ test('Door upload action, processing, empty result and error retain the carriage
   await expect(page.locator('.door-window')).toHaveCount(2);
 });
 
-test('SHM battery displays actual percentages while saturating only the fill', async ({ page }, info) => {
+test('SHM damage meter displays actual percentages, bands and a saturated reference fill', async ({ page }, info) => {
+  await page.route('**/api/health', route => route.fulfill({ json: { status: 'ready', maximum_file_bytes: 67108864, subsystems: { rail: true, door: true, acv: true, shm: true } } }));
   await page.goto('/shm');
   await expect(page.getByRole('meter')).toHaveAttribute('aria-valuetext', 'Awaiting prediction');
-  const values: [number, string, number][] = [[0, '0%', 0], [0.000001, '<0.01%', .0001], [.25, '25%', 25], [1, '100%', 100], [1.25, '125%', 100]];
-  for (const [index, [prediction, label, fill]] of values.entries()) {
+  await expect(page.getByRole('meter')).toHaveClass(/band-idle/);
+  await expect(page.getByTestId('damage-value')).toHaveText('NO DATA');
+  const values: [number, string, number, string, string][] = [
+    [0, '0%', 0, 'low', 'LOW DISPLAY BAND'], [0.000001, '<0.01%', .0001, 'low', 'LOW DISPLAY BAND'],
+    [.49, '49%', 49, 'low', 'LOW DISPLAY BAND'], [.5, '50%', 50, 'moderate', 'MODERATE DISPLAY BAND'],
+    [.799, '79.9%', 79.9, 'moderate', 'MODERATE DISPLAY BAND'], [.8, '80%', 80, 'high', 'HIGH DISPLAY BAND'],
+    [.9, '90%', 90, 'high', 'HIGH DISPLAY BAND'],
+    [1, '100%', 100, 'high', 'REFERENCE REACHED'], [1.25, '125%', 100, 'high', 'REFERENCE REACHED'],
+  ];
+  for (const [index, [prediction, label, fill, band, bandLabel]] of values.entries()) {
     await page.route('**/api/predict/shm', route => route.fulfill({ json: { subsystem: 'shm', model_version: 'test', file_id: `shm-${index}.csv`, prediction, cycle_count: 1, equivalent_stress_amplitude: 1, maximum_cycle_range: 1, estimated_percentage_error: 0 } }));
     await page.getByLabel('Choose CSV files', { exact: true }).setInputFiles({ ...file, name: `shm-${index}.csv` });
     await expect(page.getByTestId('damage-value')).toHaveText(label);
-    await expect(page.getByRole('meter')).toHaveAttribute('aria-valuenow', String(prediction * 100));
-    const fillWidth = await page.locator('.battery-fill').evaluate(el => parseFloat((el as HTMLElement).style.width));
+    await expect(page.getByTestId('damage-band')).toHaveText(bandLabel);
+    await expect(page.getByRole('meter')).toHaveClass(new RegExp(`band-${band}`));
+    await expect(page.getByRole('meter')).toHaveAttribute('aria-valuemax', '100');
+    const ariaValue = Number(await page.getByRole('meter').getAttribute('aria-valuenow'));
+    expect(ariaValue).toBeCloseTo(fill, 8);
+    const fillWidth = await page.locator('.damage-meter-fill').evaluate(el => parseFloat((el as HTMLElement).style.width));
     expect(fillWidth).toBeCloseTo(fill, 5);
-    const battery = await page.getByRole('meter').boundingBox();
+    const meter = await page.getByRole('meter').boundingBox();
     const train = await page.locator('.shm-train').boundingBox();
-    expect(battery!.x).toBeGreaterThan(train!.x);
-    expect(battery!.y + battery!.height).toBeLessThan(train!.y + train!.height);
+    expect(meter!.x).toBeGreaterThan(train!.x);
+    expect(meter!.y + meter!.height).toBeLessThan(train!.y + train!.height);
+    if (prediction === .9) await page.screenshot({ path: info.outputPath('shm-damage-meter-90.png'), fullPage: true });
   }
-  await page.screenshot({ path: info.outputPath('shm-battery.png'), fullPage: true });
+  await expect(page.getByRole('meter')).toHaveAttribute('aria-valuetext', /125%.*visual meter is capped at 100%/);
+  await page.screenshot({ path: info.outputPath('shm-damage-meter.png'), fullPage: true });
+});
+
+test('Rail swaps the visual sides without swapping their prediction meaning', async ({ page }, info) => {
+  await page.route('**/api/health', route => route.fulfill({ json: { status: 'ready', maximum_file_bytes: 67108864, subsystems: { rail: true, door: true, acv: true, shm: true } } }));
+  await page.route('**/api/predict/rail', route => route.fulfill({ json: { subsystem: 'rail', model_version: 'test', file_id: 'state.csv', prediction: 'Side I', scores: { Normal: .1, 'Side I': .8, 'Side II': .1 }, side_energy: {}, dominant_frequency: {} } }));
+  await page.goto('/rail');
+  await page.getByLabel('Choose CSV files', { exact: true }).setInputFiles(file);
+  await expect(page.locator('[data-side="Side I"]')).toHaveAttribute('data-state', 'bad');
+  await expect(page.locator('[data-side="Side II"]')).toHaveAttribute('data-state', 'good');
+  await expect(page.locator('.track-side > strong')).toHaveText(['◀ SIDE II (LEFT)', 'SIDE I (RIGHT) ▶']);
+  await expect(page.locator('.side-card > div > strong')).toHaveText(['SIDE II', 'SIDE I']);
+  const sideI = await page.locator('[data-side="Side I"]').boundingBox();
+  const sideII = await page.locator('[data-side="Side II"]').boundingBox();
+  expect(sideII!.x).toBeLessThan(sideI!.x);
+  await page.screenshot({ path: info.outputPath('rail-swapped-sides.png'), fullPage: true });
 });

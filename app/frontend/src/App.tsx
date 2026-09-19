@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { DEFAULT_LIMIT, droppedFiles, type Health, type RailLabel, type Subsystem, modules, resultLabel, resultTone, exportDoorSubmission, exportResults } from './data';
-import { RailArtwork } from './RailArtwork';
+import { RAIL_VISUAL_SIDES, RailArtwork } from './RailArtwork';
 import { DoorView, ACVView, SHMView } from './SubsystemViews';
 import { TrainArtwork } from './TrainArtwork';
 import { type Batch, useBatch } from './useBatch';
@@ -103,13 +103,13 @@ function RailView({ batch }: { batch: Batch }) {
     <div className="telemetry-panel"><span className="file-icon"><Icon name="file" /></span><div className="file-label"><span className="eyebrow">{prediction ? 'FILE ANALYSED' : 'RECORDING'} <span className="mini-tag">BATCH ML</span></span><strong title={selected?.name}>{selected?.name ?? 'Awaiting file input…'}</strong></div><span className={`prediction-badge ${!prediction ? 'waiting' : prediction === 'Normal' ? 'good' : 'bad'}`}><span className="dot" />{!prediction ? (selected?.status === 'failed' ? 'Analysis failed' : 'Awaiting result') : prediction === 'Normal' ? 'Nominal Profile' : `${prediction} Corrugation`}</span></div>
     {selected?.result?.subsystem === 'rail' && <DiagnosisSummary result={selected.result} />}
     <div className="track-panel"><div className="track-head">
-      {(['Side I', 'Side II'] as const).map((side, index) => <div className={`track-side ${index ? 'right' : ''}`} key={side}><strong>{index ? 'SIDE II (RIGHT) ▶' : '◀ SIDE I (LEFT)'}</strong><span className={`side-chip ${!prediction ? 'waiting' : prediction === side ? 'bad' : 'good'}`}><span className="dot" />{side}: {!prediction ? 'Waiting' : prediction === side ? 'Bad' : 'Good'}</span></div>)}
+      {RAIL_VISUAL_SIDES.map((side, index) => <div className={`track-side ${index ? 'right' : ''}`} key={side}><strong>{index ? `${side.toUpperCase()} (RIGHT) ▶` : `◀ ${side.toUpperCase()} (LEFT)`}</strong><span className={`side-chip ${!prediction ? 'waiting' : prediction === side ? 'bad' : 'good'}`}><span className="dot" />{side}: {!prediction ? 'Waiting' : prediction === side ? 'Bad' : 'Good'}</span></div>)}
       <div className="track-axis">▲ TRACK AXIS ▲<span>CENTERLINE</span></div>
     </div>
     <div className="track-stage"><RailArtwork prediction={prediction} /></div>
     {!prediction && <p className="waiting-message">{selected?.error ?? 'Your recording’s prediction will appear here.'}</p>}
-    <div className="side-cards">{(['Side I', 'Side II'] as const).map(side => <article key={side} className={`side-card ${!prediction ? 'waiting' : prediction === side ? 'bad' : 'good'}`}><div><strong>{side.toUpperCase()}</strong><span>{!prediction ? 'WAITING' : prediction === side ? 'BAD' : 'GOOD'}</span></div><h2>{!prediction ? 'Awaiting analysis' : prediction === side ? 'Corrugation Alert' : 'Smooth / Nominal'}</h2><p>{!prediction ? 'Upload a CSV recording' : prediction === side ? 'Model flags this side' : 'Not flagged by this prediction'}</p></article>)}</div>
-    <p className="diagram-note">Whole-recording model classification. The diagram does not locate individual defects.</p>
+    <div className="side-cards">{RAIL_VISUAL_SIDES.map(side => <article key={side} className={`side-card ${!prediction ? 'waiting' : prediction === side ? 'bad' : 'good'}`}><div><strong>{side.toUpperCase()}</strong><span>{!prediction ? 'WAITING' : prediction === side ? 'BAD' : 'GOOD'}</span></div><h2>{!prediction ? 'Awaiting analysis' : prediction === side ? 'Corrugation Alert' : 'Smooth / Nominal'}</h2><p>{!prediction ? 'Upload a CSV recording' : prediction === side ? 'Model flags this side' : 'Not flagged by this prediction'}</p></article>)}</div>
+    <p className="diagram-note">Visual orientation: Side II is shown left and Side I right. Whole-recording model classification; the diagram does not locate individual defects.</p>
     </div>
   </section>;
 }

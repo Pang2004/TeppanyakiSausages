@@ -55,6 +55,9 @@ test('real inference, batch selection, persistence and CSV download', async ({ p
     await expect(page.locator('.prediction-badge')).toHaveText(label === 'Normal' ? 'Nominal Profile' : `${label} Corrugation`);
     await expect(page.locator(`[data-side="Side I"]`)).toHaveAttribute('data-state', label === 'Side I' ? 'bad' : 'good');
     await expect(page.locator(`[data-side="Side II"]`)).toHaveAttribute('data-state', label === 'Side II' ? 'bad' : 'good');
+    const sideI = await page.locator('[data-side="Side I"]').boundingBox();
+    const sideII = await page.locator('[data-side="Side II"]').boundingBox();
+    expect(sideII!.x).toBeLessThan(sideI!.x);
   }
   await page.screenshot({ path: info.outputPath('rail-result.png'), fullPage: true });
   await noOverflow(page);
